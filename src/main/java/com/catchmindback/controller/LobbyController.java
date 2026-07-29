@@ -2,8 +2,9 @@ package com.catchmindback.controller;
 
 import com.catchmindback.entity.GameRoom;
 import com.catchmindback.entity.Player;
-import com.catchmindback.service.GameService; // 👈 추가된 import
+import com.catchmindback.service.GameService;
 import com.catchmindback.service.LobbyService;
+import lombok.Data; // 💡 DTO 사용을 위해 추가
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -18,7 +19,7 @@ import java.util.Map;
 public class LobbyController {
 
   private final LobbyService lobbyService;
-  private final GameService gameService; // 👈 방 인원수 조회를 위해 GameService 주입 추가
+  private final GameService gameService; // 방 인원수 조회를 위해 GameService 주입 추가
 
   // 1. 닉네임 등록 API (POST /api/lobby/player)
   @PostMapping("/player")
@@ -29,14 +30,18 @@ public class LobbyController {
   }
 
   // 2. 방 생성 API (POST /api/lobby/room)
+  // 프론트엔드 모달에서 보내는 제목, 최대인원, 라운드수를 받기 위해 DTO(RoomCreateRequest) 사용
   @PostMapping("/room")
-  public ResponseEntity<GameRoom> createRoom(@RequestBody Map<String, String> request) {
-    String roomName = request.get("roomName");
-    GameRoom newRoom = lobbyService.createRoom(roomName);
+  public ResponseEntity<GameRoom> createRoom(@RequestBody RoomCreateRequest request) {
+    GameRoom newRoom = lobbyService.createRoom(
+        request.getRoomName(),
+        request.getMaxPlayers(),
+        request.getMaxRound()
+    );
     return ResponseEntity.ok(newRoom);
   }
 
-  // 3. 방 목록 조회 API (GET /api/lobby/rooms) - 💡 방 인원수 실시간 반영 로직 추가
+  // 방 목록 조회 API (GET /api/lobby/rooms) - 방 인원수 실시간 반영 로직 추가
   @GetMapping("/rooms")
   public ResponseEntity<List<GameRoom>> getRooms() {
     List<GameRoom> rooms = lobbyService.getAllRooms();
@@ -48,5 +53,13 @@ public class LobbyController {
     }
 
     return ResponseEntity.ok(rooms);
+  }
+
+  // 프론트엔드의 방 생성 데이터를 통째로 매핑받기 위한 클래스
+  @Data
+  public static class RoomCreateRequest {
+    private String roomName;
+    private int maxPlayers = 8;
+    private int maxRound = 5;
   }
 }

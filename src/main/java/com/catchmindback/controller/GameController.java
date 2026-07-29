@@ -4,6 +4,7 @@ import com.catchmindback.dto.ChatMessage;
 import com.catchmindback.dto.DrawMessage;
 import com.catchmindback.dto.RoomPlayer;
 import com.catchmindback.service.GameService;
+import com.catchmindback.service.LobbyService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
@@ -18,6 +19,7 @@ public class GameController {
 
   private final SimpMessagingTemplate messagingTemplate;
   private final GameService gameService;
+  private final LobbyService lobbyService;
 
   @MessageMapping("/room/{roomId}/draw")
   public void handleDraw(@DestinationVariable String roomId, DrawMessage message) {
@@ -27,10 +29,12 @@ public class GameController {
   // 게임 시작 (최초 1회만 방장에 의해 호출됨)
   @MessageMapping("/room/{roomId}/start")
   public void startGame(@DestinationVariable String roomId, ChatMessage requestMsg) {
-    gameService.startNewGame(roomId, messagingTemplate);
+    // 로비 서비스에서 해당 방의 라운드 수를 가져와 게임 서비스로 전달
+    int maxRound = lobbyService.getRoomMaxRound(roomId);
+    gameService.startNewGame(roomId, maxRound, messagingTemplate);
   }
 
-  // 채팅 및 정답 판정 (정답 시 다음 라운드 자동 스케줄링 추가)
+  // 채팅 및 정답 판정 (정답 시 다음 라운드 자동 스케줄링)
   @MessageMapping("/room/{roomId}/chat")
   public void handleChat(@DestinationVariable String roomId, ChatMessage message) {
 
@@ -41,25 +45,10 @@ public class GameController {
       return;
     }
 
+    // 💡 수정됨: 복잡한 로직을 모두 GameService의 endRound 로 위임!
     if (gameService.isCorrectAnswer(roomId, message.getMessage())) {
-      // 정답을 맞췄으므로 타이머 중지
-      gameService.stopTimer(roomId);
-
-      // 💡 수정됨: 정답 단어를 안전하게 꺼내어 시스템 메시지에 포함시킴
-      String revealedAnswer = gameService.processCorrectAnswer(roomId);
-
-      // 정답 시스템 메시지 전송 (정답 단어 안내 추가)
-      ChatMessage systemMsg = new ChatMessage();
-      systemMsg.setType("SYSTEM");
-      systemMsg.setSender("시스템");
-      systemMsg.setMessage(message.getSender() + "님이 정답을 맞췄습니다! 정답은 [" + revealedAnswer + "] 입니다. (3초 뒤 다음 라운드)");
-      messagingTemplate.convertAndSend("/topic/room/" + roomId + "/chat", systemMsg);
-
-      // 캔버스 자동 초기화
-      gameService.clearRoomCanvas(roomId, messagingTemplate);
-
-      // 3초 뒤에 다음 사람의 턴으로 새 라운드 자동 시작
-      gameService.scheduleNextRound(roomId, messagingTemplate, 3);
+      // 정답자 닉네임과 함께 "CORRECT" 상태로 라운드 종료 메서드 호출
+      gameService.endRound(roomId, "CORRECT", message.getSender(), messagingTemplate);
     } else {
       // 일반 채팅
       messagingTemplate.convertAndSend("/topic/room/" + roomId + "/chat", message);
@@ -92,8 +81,17 @@ public class GameController {
   // 유저 퇴장 알림
   @MessageMapping("/room/{roomId}/leave")
   public void handleLeave(@DestinationVariable String roomId, ChatMessage message) {
-    List<RoomPlayer> players = gameService.playerLeave(roomId, message.getSender());
-    broadcastPlayers(roomId, players);
+    // 💡 수정됨: 서비스에 messagingTemplate 객체를 함께 전달합니다.
+    List<RoomPlayer> players = gameService.playerLeave(roomId, message.getSender(), messagingTemplate);
+
+    // 퇴장 후 남은 인원이 0명이라면? 방 폭파
+    if (players != null && players.isEmpty()) {
+      gameService.cleanupRoom(roomId); // 1. 메모리에서 방 데이터 싹 청소
+      lobbyService.deleteRoom(roomId); // 2. DB에서 방 완전 삭제
+    } else if (players != null) {
+      // 인원이 남아있다면 남은 사람들에게만 갱신된 명단 방송
+      broadcastPlayers(roomId, players);
+    }
   }
 
   // 스킵 투표 알림 수신

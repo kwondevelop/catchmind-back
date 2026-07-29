@@ -12,4 +12,16 @@ public class DrawMessage {
   private double startY;
   private double endX;
   private double endY;
+  
+  // 되돌리기 상태 반영
+  private String imageState;
+
+  // Getter & Setter
+  public String getImageState() {
+    return imageState;
+  }
+
+  public void setImageState(String imageState) {
+    this.imageState = imageState;
+  }
 }
