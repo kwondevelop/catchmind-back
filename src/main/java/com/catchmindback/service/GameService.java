@@ -2,6 +2,7 @@ package com.catchmindback.service;
 
 import com.catchmindback.dto.ChatMessage;
 import com.catchmindback.dto.RoomPlayer;
+import lombok.RequiredArgsConstructor; // 💡 Lombok 추가
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
@@ -9,15 +10,11 @@ import java.util.*;
 import java.util.concurrent.*;
 
 @Service
+@RequiredArgsConstructor // 💡 WordService 자동 주입을 위해 추가
 public class GameService {
 
-  private final List<String> wordList = Arrays.asList(
-      "강아지", "고양이", "호랑이", "사자", "코끼리", "기린", "원숭이", "토끼", "판다", "펭귄",
-      "피자", "치킨", "햄버거", "떡볶이", "라면", "김밥", "초밥", "삼겹살", "아이스크림", "케이크",
-      "자전거", "자동차", "비행기", "우산", "시계", "안경", "모자", "신발", "가방", "냉장고",
-      "바다", "산", "하늘", "구름", "무지개", "달", "별", "번개", "나무", "꽃",
-      "경찰", "소방관", "의사", "요리사", "선생님", "학생", "가수", "화가", "축구", "농구"
-  );
+  // 💡 기존에 길게 작성되어 있던 wordList 배열은 삭제하고 WordService를 주입받습니다.
+  private final WordService wordService;
 
   private final Map<String, String> roomAnswers = new ConcurrentHashMap<>();
   private final Map<String, ScheduledFuture<?>> timerTasks = new ConcurrentHashMap<>();
@@ -48,11 +45,14 @@ public class GameService {
     List<String> used = roomUsedWords.get(roomId);
 
     synchronized (used) {
-      List<String> available = new ArrayList<>(wordList);
+      // 💡 WordService에서 파일로부터 읽어온 단어 리스트를 가져옵니다.
+      List<String> allWords = wordService.getWordList();
+      List<String> available = new ArrayList<>(allWords);
+
       available.removeAll(used);
       if (available.isEmpty()) {
         used.clear();
-        available.addAll(wordList);
+        available.addAll(allWords);
       }
       String nextWord = available.get(random.nextInt(available.size()));
       used.add(nextWord);
@@ -60,7 +60,6 @@ public class GameService {
     }
   }
 
-  // 편의 메서드: 변경된 유저 명단(점수 포함)을 방 전체에 브로드캐스트
   private void broadcastPlayers(String roomId, List<RoomPlayer> players, SimpMessagingTemplate messagingTemplate) {
     ChatMessage msg = new ChatMessage();
     msg.setType("PLAYERS");
@@ -69,15 +68,12 @@ public class GameService {
     messagingTemplate.convertAndSend("/topic/room/" + roomId + "/chat", msg);
   }
 
-  // 파라미터에 int maxRound를 추가하고 5 대신 사용합니다.
   public void startNewGame(String roomId, int maxRound, SimpMessagingTemplate messagingTemplate) {
     List<RoomPlayer> players = roomPlayers.get(roomId);
     if (players == null || players.isEmpty()) return;
 
     roomPlayingStatus.put(roomId, true);
     roomCurrentRound.put(roomId, 1);
-
-    // 고정값 5 대신 방 설정에서 가져온 라운드 수 적용
     roomMaxRound.put(roomId, maxRound);
 
     Map<String, Integer> scores = new ConcurrentHashMap<>();
@@ -128,7 +124,6 @@ public class GameService {
     roomAnswers.put(roomId, newWord);
     clearRoomCanvas(roomId, messagingTemplate);
 
-    // 현재 라운드와 최대 라운드 가져오기
     int currentRound = roomCurrentRound.getOrDefault(roomId, 1);
     int maxRound = roomMaxRound.getOrDefault(roomId, 10);
 
@@ -137,7 +132,6 @@ public class GameService {
     startMsg.setSender("시스템");
     startMsg.setMessage(newWord);
     startMsg.setDrawerId(drawerId);
-
     startMsg.setCurrentRound(currentRound);
     startMsg.setMaxRound(maxRound);
 
@@ -167,7 +161,6 @@ public class GameService {
     int currentRound = roomCurrentRound.getOrDefault(roomId, 1);
     int maxRound = roomMaxRound.getOrDefault(roomId, 5);
 
-    // 정답일 경우 점수 부여 및 프론트엔드 명단(점수) 실시간 업데이트
     if ("CORRECT".equals(reason) && winnerNickname != null) {
       roomScores.putIfAbsent(roomId, new ConcurrentHashMap<>());
       Map<String, Integer> scores = roomScores.get(roomId);
@@ -179,12 +172,12 @@ public class GameService {
         synchronized (players) {
           for (RoomPlayer p : players) {
             if (p.getNickname().equals(winnerNickname)) {
-              p.setScore(newScore); // RoomPlayer 객체 점수 갱신
+              p.setScore(newScore);
               break;
             }
           }
         }
-        broadcastPlayers(roomId, players, messagingTemplate); // 갱신된 점수를 화면에 전송!
+        broadcastPlayers(roomId, players, messagingTemplate);
       }
     }
 
@@ -193,12 +186,15 @@ public class GameService {
     systemMsg.setSender("시스템");
 
     if ("CORRECT".equals(reason)) {
-      systemMsg.setMessage(winnerNickname + "님이 정답을 맞췄습니다! \n정답: [" + answer + "] \n(" + currentRound + "/" + maxRound + " 라운드 종료)");
+      systemMsg.setMessage(winnerNickname + "님이 정답을 맞췄습니다! \n정답: [" + answer + "] \n(" + currentRound + " 라운드 종료)");
     } else if ("SKIP".equals(reason)) {
       systemMsg.setMessage("과반수 투표로 라운드 스킵! \n정답: [" + answer + "] \n(" + currentRound + " 라운드 종료)");
     } else if ("TIMEOUT".equals(reason)) {
       systemMsg.setMessage("시간 초과! \n정답: [" + answer + "] \n(" + currentRound + " 라운드 종료)");
+    } else if ("DRAWER_LEFT".equals(reason)) {
+      systemMsg.setMessage("출제자가 퇴장하여 라운드가 강제 종료되었습니다. \n정답: [" + answer + "] \n(" + currentRound + " 라운드 종료)");
     }
+
     messagingTemplate.convertAndSend("/topic/room/" + roomId + "/chat", systemMsg);
 
     if (currentRound >= maxRound) {
@@ -258,10 +254,10 @@ public class GameService {
         synchronized (players) {
           for (RoomPlayer p : players) {
             p.setReady(false);
-            p.setScore(0); // 다음 게임을 위해 점수 초기화
+            p.setScore(0);
           }
         }
-        broadcastPlayers(roomId, players, messagingTemplate); // 갱신된 내역(준비 취소, 점수 초기화) 전송
+        broadcastPlayers(roomId, players, messagingTemplate);
       }
     }, delaySeconds, TimeUnit.SECONDS);
   }
@@ -280,7 +276,7 @@ public class GameService {
   }
 
   public void stopTimer(String roomId) {
-    ScheduledFuture<?> future = timerTasks.get(roomId);
+    ScheduledFuture<?> future = timerTasks.remove(roomId);
     if (future != null && !future.isDone()) future.cancel(true);
   }
 
@@ -298,7 +294,7 @@ public class GameService {
     synchronized (players) {
       boolean exists = players.stream().anyMatch(p -> p.getNickname().equals(nickname));
       if (!exists) {
-        players.add(new RoomPlayer(nickname, false, players.isEmpty())); // 점수는 RoomPlayer 객체 기본값 0으로 들어감
+        players.add(new RoomPlayer(nickname, false, players.isEmpty()));
       }
     }
     return players;
@@ -324,47 +320,51 @@ public class GameService {
     if (players != null) {
       synchronized (players) {
         players.removeIf(p -> p.getNickname().equals(nickname));
+
         if (!players.isEmpty() && players.stream().noneMatch(RoomPlayer::isHost)) {
           players.get(0).setHost(true);
         }
       }
 
-      // 게임이 진행 중인 상태에서 남은 인원이 2명 미만이 되면 강제 종료
-      if (roomPlayingStatus.getOrDefault(roomId, false) && players.size() < 2) {
-        stopTimer(roomId);
-        roomPlayingStatus.put(roomId, false);
-        roomCurrentRound.remove(roomId);
-        roomScores.remove(roomId);
-        currentDrawers.remove(roomId);
-        roomAnswers.remove(roomId);
+      if (roomPlayingStatus.getOrDefault(roomId, false)) {
+        if (players.size() < 2) {
+          stopTimer(roomId);
+          roomPlayingStatus.put(roomId, false);
+          roomCurrentRound.remove(roomId);
+          roomScores.remove(roomId);
+          currentDrawers.remove(roomId);
+          roomAnswers.remove(roomId);
 
-        // 남은 플레이어들의 준비 상태 초기화
-        for (RoomPlayer p : players) {
-          p.setReady(false);
-          p.setScore(0);
+          for (RoomPlayer p : players) {
+            p.setReady(false);
+            p.setScore(0);
+          }
+
+          ChatMessage abortMsg = new ChatMessage();
+          abortMsg.setType("SYSTEM");
+          abortMsg.setSender("시스템");
+          abortMsg.setMessage("⚠️ 플레이어 이탈로 인해 게임이 강제 종료되었습니다. \n(최소 인원 부족)");
+          messagingTemplate.convertAndSend("/topic/room/" + roomId + "/chat", abortMsg);
+
+          ChatMessage playerMsg = new ChatMessage();
+          playerMsg.setType("PLAYERS");
+          playerMsg.setSender("시스템");
+          playerMsg.setData(players);
+          messagingTemplate.convertAndSend("/topic/room/" + roomId + "/chat", playerMsg);
         }
-
-        // 강제 종료 안내 시스템 메시지 전송
-        ChatMessage abortMsg = new ChatMessage();
-        abortMsg.setType("SYSTEM");
-        abortMsg.setSender("시스템");
-        abortMsg.setMessage("⚠️ 플레이어 이탈로 인해 게임이 강제 종료되었습니다. \n(최소 인원 부족)");
-        messagingTemplate.convertAndSend("/topic/room/" + roomId + "/chat", abortMsg);
-
-        // 갱신된 플레이어 명단 방송
-        ChatMessage playerMsg = new ChatMessage();
-        playerMsg.setType("PLAYERS");
-        playerMsg.setSender("시스템");
-        playerMsg.setData(players);
-        messagingTemplate.convertAndSend("/topic/room/" + roomId + "/chat", playerMsg);
+        else {
+          String currentDrawer = currentDrawers.get(roomId);
+          if (nickname.equals(currentDrawer)) {
+            endRound(roomId, "DRAWER_LEFT", null, messagingTemplate);
+          }
+        }
       }
     }
     return players;
   }
 
-  // 방이 텅 비었을 때 서버 메모리를 깔끔하게 정리하는 메서드
   public void cleanupRoom(String roomId) {
-    stopTimer(roomId); // 혹시 돌아가고 있는 타이머가 있다면 정지
+    stopTimer(roomId);
     roomPlayers.remove(roomId);
     currentDrawers.remove(roomId);
     roomSkipVotes.remove(roomId);

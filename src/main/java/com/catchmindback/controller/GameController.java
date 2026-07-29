@@ -5,11 +5,13 @@ import com.catchmindback.dto.DrawMessage;
 import com.catchmindback.dto.RoomPlayer;
 import com.catchmindback.service.GameService;
 import com.catchmindback.service.LobbyService;
+import com.catchmindback.config.WebSocketEventListener;
 import lombok.RequiredArgsConstructor;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Controller;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 
 import java.util.List;
 
@@ -64,9 +66,15 @@ public class GameController {
     messagingTemplate.convertAndSend("/topic/room/" + roomId + "/chat", msg);
   }
 
-  // 유저 입장 알림
   @MessageMapping("/room/{roomId}/enter")
-  public void handleEnter(@DestinationVariable String roomId, ChatMessage message) {
+  public void handleEnter(@DestinationVariable String roomId, ChatMessage message, SimpMessageHeaderAccessor headerAccessor) {
+    // 연결된 세션 ID를 가져와서 유저 닉네임과 방 번호를 메모리에 기록
+    String sessionId = headerAccessor.getSessionId();
+    if (sessionId != null) {
+      WebSocketEventListener.sessionUserMap.put(sessionId, message.getSender());
+      WebSocketEventListener.sessionRoomMap.put(sessionId, roomId);
+    }
+
     List<RoomPlayer> players = gameService.playerEnter(roomId, message.getSender());
     broadcastPlayers(roomId, players);
   }
